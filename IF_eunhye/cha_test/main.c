@@ -1,17 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <arpa/inet.h>
+#include <libwebsockets.h>
 
 #define PORT 5001
-
-#define BUFFER_SIZE 4096
 #define FILE_PATH "ex.json"
 #define HTML_FILE "client1.html"
 
+#define BUFFER_SIZE 4096
+
 // 파일 내용을 읽어 클라이언트에 전송
-void send_file_content(int client_socket, const char *filename, const char *content_type) {
+void send_file_content(struct lws *wsi, const char *filename, const char *content_type) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
         const char *response =
@@ -20,25 +19,15 @@ void send_file_content(int client_socket, const char *filename, const char *cont
             "Connection: close\r\n"
             "\r\n"
             "404 Not Found";
-        send(client_socket, response, strlen(response), 0);
+        lws_write(wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
         return;
     }
-
-    // 응답 헤더 전송
-    char header[BUFFER_SIZE];
-    snprintf(header, sizeof(header),
-             "HTTP/1.1 200 OK\r\n"
-             "Content-Type: %s\r\n"
-             "Connection: close\r\n"
-             "\r\n",
-             content_type);
-    send(client_socket, header, strlen(header), 0);
 
     // 파일 내용 전송
     char buffer[BUFFER_SIZE];
     size_t bytes;
     while ((bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        send(client_socket, buffer, bytes, 0);
+        lws_write(wsi, (unsigned char *)buffer, bytes, LWS_WRITE_TEXT);
     }
     fclose(file);
 }
@@ -58,77 +47,75 @@ void append_to_json_file(const char *data) {
     fclose(json_file);
 }
 
-int main() {
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int addrlen = sizeof(address);
-    char buffer[BUFFER_SIZE] = {0};
-
-    // 소켓 생성
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("소켓 실패");
-        exit(EXIT_FAILURE);
-    }
-
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(PORT);
-
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("바인딩 실패");
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(server_fd, 3) < 0) {
-        perror("리스닝 실패");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("C 서버가 포트 %d에서 실행 중입니다.\n", PORT);
-
-    while (1) {
-        printf("클라이언트를 기다리는 중...\n");
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t *)&addrlen)) < 0) {
-            perror("연결 실패");
-            exit(EXIT_FAILURE);
-        }
-
-        printf("클라이언트가 연결되었습니다.\n");
-        memset(buffer, 0, BUFFER_SIZE);
-        read(new_socket, buffer, BUFFER_SIZE);
-
-        if (strncmp(buffer, "GET /favicon.ico", 16) == 0) {
-            const char *response =
-                "HTTP/1.1 204 No Content\r\n"
-                "Content-Type: image/x-icon\r\n"
-                "Connection: close\r\n"
-                "\r\n";
-            send(new_socket, response, strlen(response), 0);
-        } else if (strncmp(buffer, "GET /get-existing-pixels", 24) == 0) {
-            send_file_content(new_socket, FILE_PATH, "application/json");
-        } else if (strncmp(buffer, "GET / ", 6) == 0 || strncmp(buffer, "GET / HTTP", 10) == 0) {
-            send_file_content(new_socket, HTML_FILE, "text/html");
-        } else if (strncmp(buffer, "POST", 4) == 0) {
-            char *body = strstr(buffer, "\r\n\r\n");
-            if (body != NULL) {
-                body += 4;
-                printf("POST 요청 데이터: %s\n", body);
-                append_to_json_file(body);
-                const char *response =
-                    "HTTP/1.1 200 OK\r\n"
-                    "Access-Control-Allow-Origin: *\r\n"
-                    "Content-Type: application/json\r\n"
-                    "Connection: close\r\n"
-                    "\r\n"
-                    "{ \"status\": \"success\" }";
-                send(new_socket, response, strlen(response), 0);
+// 웹소켓 핸들러
+static int callback(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
+    switch (reason) {
+        case LWS_CALLBACK_ESTABLISHED:
+            printf("웹소켓 연결이 성공적으로 이루어졌습니다.\n");
+            break;
+        case LWS_CALLBACK_RECEIVE:
+            {
+                char *message = (char *)in;
+                if (strncmp(message, "GET /get-existing-pixels", 24) == 0) {
+                    send_file_content(wsi, FILE_PATH, "application/json");
+                } else if (strncmp(message, "GET / ", 6) == 0 || strncmp(message, "GET / HTTP", 10) == 0) {
+                    send_file_content(wsi, HTML_FILE, "text/html");
+                } else if (strncmp(message, "POST", 4) == 0) {
+                    printf("POST 요청 데이터: %s\n", message);
+                    append_to_json_file(message);
+                    const char *response = 
+                        "{ \"status\": \"success\" }";
+                    lws_write(wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
+                } else {
+                    printf("알 수 없는 요청입니다.\n");
+                }
             }
-        } else {
-            printf("알 수 없는 요청입니다.\n");
-        }
+            break;
+        case LWS_CALLBACK_CLOSED:
+            printf("웹소켓 연결이 종료되었습니다.\n");
+            break;
+        default:
+            break;
+    }
+    return 0;
+}
 
-        close(new_socket);
+// 웹소켓 프로토콜 설정
+static struct lws_protocols protocols[] = {
+    {
+        .name = "http", 
+        .callback = callback,
+        .per_session_data_size = 0,
+        .rx_buffer_size = 0,
+    },
+    { NULL, NULL, 0, 0 } // 끝을 나타내는 NULL 프로토콜
+};
+
+int main() {
+    struct lws_context_creation_info info;
+    struct lws_context *context;
+    memset(&info, 0, sizeof(info));
+
+    info.port = PORT;
+    info.protocols = protocols;
+    info.gid = -1;
+    info.uid = -1;
+    info.iface = NULL;
+
+    // 웹소켓 서버 컨텍스트 생성
+    context = lws_create_context(&info);
+    if (context == NULL) {
+        fprintf(stderr, "웹소켓 서버 생성 실패\n");
+        return -1;
     }
 
+    printf("웹소켓 서버가 포트 %d에서 실행 중입니다.\n", PORT);
+
+    // 서버 실행 루프
+    while (1) {
+        lws_service(context, 100);
+    }
+
+    lws_context_destroy(context);
     return 0;
 }
