@@ -41,8 +41,9 @@ void append_to_json_file(const char *data) {
         fclose(json_file);
         return;
     }
-
+    //밑에서 두번째 줄에 fp 옮김
     fseek(json_file, -2, SEEK_END);
+    //거따가 
     fprintf(json_file, ",\n  %s\n]", data);
     fclose(json_file);
 }
@@ -92,12 +93,19 @@ static struct lws_protocols protocols[] = {
 };
 
 int main() {
+
+    //웹소켓 디스크립터
     struct lws_context_creation_info info;
+    //서버 상태 및 실행 컨텍스트 구조체
     struct lws_context *context;
     memset(&info, 0, sizeof(info));
 
+    //디스크립터에 정보 저장
     info.port = PORT;
     info.protocols = protocols;
+
+    //서버상 그룹 및 사용자 id 설정
+    //-1은 기본 설정 사용한단 뜻
     info.gid = -1;
     info.uid = -1;
     info.iface = NULL;
@@ -113,9 +121,11 @@ int main() {
 
     // 서버 실행 루프
     while (1) {
+        //서버의 이벤트 처리 함수
+        // 서버 컨텍스트, 대기 시간(100ms후 이벤트 확인)
         lws_service(context, 100);
     }
-
+    //서버 컨텍스트 해제 및 종료
     lws_context_destroy(context);
     return 0;
 }
