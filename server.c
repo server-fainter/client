@@ -215,11 +215,11 @@ void close_server(ServerManager *sm){
     close(sm->epoll_fd);
 }
 
+
 // 새로운 클라이언트를 ACCEPT하는 함수
-int accept_new_client(ServerManager *sm)
-{
-    // 클라이언트 연결 수락
-    struct sockaddr_in client_addr;
+int accept_new_client(ServerManager *sm) {
+
+     struct sockaddr_in client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
     int client_socket = accept(sm->server_socket, (struct sockaddr*)&client_addr, &client_addr_len);
 
@@ -235,14 +235,16 @@ int accept_new_client(ServerManager *sm)
     }
 
     // 클라이언트를 epoll 이벤트에 등록
-    sm->ev.events = EPOLLIN | EPOLLET; 
+    sm->ev.events = EPOLLIN | EPOLLET;
     sm->ev.data.fd = client_socket;
     if (epoll_ctl(sm->epoll_fd, EPOLL_CTL_ADD, client_socket, &sm->ev) == -1) {
         perror("epoll_ctl add client failed");
         close(client_socket);
     }
 
-    // 클라이언트 연결 성공 메시지 출력
-    printf("Accepted new client: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port)); 
+    // 접속 로그 출력
+    printf("New client connected: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
     return 0;
 }
+  
