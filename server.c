@@ -9,12 +9,11 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 
-
 #define PORT 8080
 //#define BUFFER_SIZE 4096
 #define FILE_PATH "ex.json"
-#define HTML_FILE "cli.html"
-//#define MAX_CLIENTS 1000
+
+
 
 // 파일 디스크립터를 non-blocking 모드로 설정하는 함수
 int set_nonblocking(int fd) {
@@ -82,7 +81,103 @@ void init_server(ServerManager *sm) {
     printf("Success Init Server!\nServer is listening on port %d\n", PORT);
 }
 
-// HTTP 요청에 대한 파일 전송 처리
+
+// JSON 데이터 파일에 데이터 추가
+void append_to_json_file(const char *data) {
+    FILE *json_file = fopen(FILE_PATH, "r+");
+    if (json_file == NULL) {
+        json_file = fopen(FILE_PATH, "w");
+        fprintf(json_file, "[\n  %s\n]\n", data);
+        fclose(json_file);
+        return;
+    }
+
+    fseek(json_file, 0, SEEK_END);
+    long file_size = ftell(json_file);
+    if (file_size == 0) {
+        fprintf(json_file, "[\n  %s\n]\n", data);
+    } else {
+        fseek(json_file, -2, SEEK_END);
+        fprintf(json_file, ",\n  %s\n]", data);
+    }
+    fclose(json_file);
+}
+
+
+
+// 서버에서 픽셀 데이터를 JSON 형식으로 반환하는 함수
+void send_json_response(int client_socket) {
+    FILE *file = fopen(FILE_PATH, "r");
+    if (file == NULL) {
+        const char *response =
+            "HTTP/1.1 404 Not Found\r\n"
+            "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "404 Not Found";
+        send(client_socket, response, strlen(response), 0);
+        return;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    char *json_data = (char *)malloc(file_size + 1);
+    fread(json_data, 1, file_size, file);
+    json_data[file_size] = '\0';
+    fclose(file);
+
+    char header[BUFFER_SIZE];
+    snprintf(header, sizeof(header),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: application/json\r\n"
+             "Connection: close\r\n"
+             "\r\n");
+    send(client_socket, header, strlen(header), 0);
+    send(client_socket, json_data, file_size, 0);
+
+    free(json_data);
+}
+
+// POST 요청으로 받은 픽셀 데이터를 JSON 파일에 추가
+void handle_pixel_update(int client_socket, const char *buffer) {
+    char *body = strstr(buffer, "\r\n\r\n");
+    if (body != NULL) {
+        body += 4; // 본문 시작
+        append_to_json_file(body); // JSON 파일에 데이터 추가
+        const char *response =
+            "HTTP/1.1 200 OK\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Content-Type: application/json\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "{ \"status\": \"success\" }";
+        send(client_socket, response, strlen(response), 0);
+    }
+}
+
+// HTTP 요청 처리 함수 수정
+void handle_http_request(int client_socket, const char *buffer) {
+    if (strncmp(buffer, "GET / ", 6) == 0 || strncmp(buffer, "GET /index.html", 16) == 0) {
+        // cli.html 파일을 전송
+        send_file_content(client_socket, "cli.html", "text/html");
+    } else if (strncmp(buffer, "GET /get-existing-pixels", 24) == 0) {
+        send_json_response(client_socket); // JSON 데이터 반환
+    } else if (strncmp(buffer, "POST /update-pixel", 18) == 0) {
+        handle_pixel_update(client_socket, buffer); // 픽셀 데이터 처리
+    } else {
+        const char *response =
+            "HTTP/1.1 404 Not Found\r\n"
+            "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "404 Not Found";
+        send(client_socket, response, strlen(response), 0);
+    }
+}
+
+// HTML 파일 전송 함수 추가
 void send_file_content(int client_socket, const char *filename, const char *content_type) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
@@ -113,79 +208,8 @@ void send_file_content(int client_socket, const char *filename, const char *cont
     fclose(file);
 }
 
-// JSON 데이터 저장
-void append_to_json_file(const char *data) {
-    FILE *json_file = fopen(FILE_PATH, "r+");
-    if (json_file == NULL) {
-        // 파일이 없거나 비어 있는 경우 새로 생성
-        json_file = fopen(FILE_PATH, "w");
-        fprintf(json_file, "[\n  %s\n]\n", data);
-        fclose(json_file);
-        return;
-    }
 
-    // 파일 내용 확인
-    fseek(json_file, 0, SEEK_END);
-    long file_size = ftell(json_file);
-    fseek(json_file, 0, SEEK_SET);
-
-    if (file_size == 0) {
-        // 파일이 비어 있으면 새 JSON 배열로 초기화
-        fprintf(json_file, "[\n  %s\n]\n", data);
-    } else {
-        // 파일이 비어 있지 않으면 끝에서 두 번째 문자(닫는 대괄호 앞)로 이동
-        fseek(json_file, -2, SEEK_END);
-
-        // 닫는 대괄호가 없을 경우 추가
-        char last_char;
-        fread(&last_char, 1, 1, json_file);
-        if (last_char != ']') {
-            fprintf(json_file, "]\n");
-        }
-
-        // 새 데이터를 추가
-        fseek(json_file, -2, SEEK_END);
-        fprintf(json_file, ",\n  %s\n]", data);
-    }
-    fclose(json_file);
-}
-
-
-
-// HTTP 요청 처리
-void handle_http_request(int client_socket, const char *buffer) {
-    if (strncmp(buffer, "GET /favicon.ico", 16) == 0) {
-        const char *response =
-            "HTTP/1.1 204 No Content\r\n"
-            "Content-Type: image/x-icon\r\n"
-            "Connection: close\r\n"
-            "\r\n";
-        send(client_socket, response, strlen(response), 0);
-    } else if (strncmp(buffer, "GET /get-existing-pixels", 24) == 0) {
-        send_file_content(client_socket, FILE_PATH, "application/json");
-    } else if (strncmp(buffer, "GET / ", 6) == 0 || strncmp(buffer, "GET / HTTP", 10) == 0) {
-        send_file_content(client_socket, HTML_FILE, "text/html");
-    } else if (strncmp(buffer, "POST", 4) == 0) {
-        char *body = strstr(buffer, "\r\n\r\n");
-        if (body != NULL) {
-            body += 4;
-            printf("POST 요청 데이터: %s\n", body);
-            append_to_json_file(body);
-            const char *response =
-                "HTTP/1.1 200 OK\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "Content-Type: application/json\r\n"
-                "Connection: close\r\n"
-                "\r\n"
-                "{ \"status\": \"success\" }";
-            send(client_socket, response, strlen(response), 0);
-        }
-    } else {
-        printf("알 수 없는 요청입니다.\n");
-    }
-}
-
-// 서버 이벤트 루프 함수 추가
+// 서버 이벤트 루프
 void server_event_loop(ServerManager *sm) {
     struct epoll_event events[MAX_CLIENTS];
     char buffer[BUFFER_SIZE];
@@ -196,10 +220,10 @@ void server_event_loop(ServerManager *sm) {
             if (events[i].data.fd == sm->server_socket) {
                 accept_new_client(sm);
             } else {
-                memset(buffer, 0, BUFFER_SIZE);
                 int client_socket = events[i].data.fd;
                 int bytes_read = read(client_socket, buffer, BUFFER_SIZE - 1);
                 if (bytes_read > 0) {
+                    buffer[bytes_read] = '\0';
                     handle_http_request(client_socket, buffer);
                 }
                 close(client_socket);
@@ -247,4 +271,4 @@ int accept_new_client(ServerManager *sm) {
 
     return 0;
 }
-  
+
