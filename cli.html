@@ -72,8 +72,9 @@
         }
 
         // 서버에서 기존 데이터 가져오기 (3초 간격)
+        //클라이언트가 3초마다 서버에 요청을 보내어 기존의 픽셀 데이터를 가져옴
         function pollServer() {
-            fetch('/get-existing-pixels')
+            fetch('/get-existing-pixels') //get요청(데이터 요청)
                 .then(response => {
                     if (!response.ok) {
                         throw new Error('Network response was not ok');

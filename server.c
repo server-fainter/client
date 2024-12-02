@@ -268,7 +268,6 @@ int accept_new_client(ServerManager *sm) {
 
     // 접속 로그 출력
     printf("New client connected: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-
+  
     return 0;
 }
-
